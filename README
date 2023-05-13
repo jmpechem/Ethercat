@@ -1,0 +1,149 @@
+########### xenomai 설치 ############
+제노마이 설치 필요 패키지 설치(curse로 cmd 터미널에서 설정할 예정 UI형 설정 극혐!)
+sudo apt-get install vim gcc g++ build-essential kernel-package libncurses5-dev qt4-dev-tools grub fakeroot devscripts bc git cmake3 -y
+
+리눅스 4.1.18 커널 다운로드 및 압축풀기
+wget https://mirrors.edge.kernel.org/pub/linux/kernel/v4.x/linux-4.1.18.tar.gz
+tar xf linux-4.1.18.tar.gz
+
+제노마이 다운로드 및 압축풀기
+cd linux-4.1.18
+wget https://xenomai.org/downloads/xenomai/stable/xenomai-3.0.3.tar.bz2
+tar xf xenomai-3.0.3.tar.bz2
+
+제노마이 패치 적용
+cd linux-4.1.18
+wget https://xenomai.org/downloads/ipipe/v4.x/x86/older/ipipe-core-4.1.18-x86-7.patch
+../xenomai-3.0.3/scripts/prepare-kernel.sh --arch=x86_64 --ipipe=ipipe-core-4.1.18-x86-7.patch
+
+리눅스 4.1.18 커널 설정
+sudo make menuconfig 진입하여 아래 옵션들 다음과 같이 설정
+* General setup
+  --> Local version - append to kernel release: -xenomai-3.0.3
+  --> Timers subsystem
+      --> High Resolution Timer Support (Enable)
+* Xenomai/cobalt
+  --> Sizes and static limits
+    --> Number of registry slots (512 --> 4096)
+    --> Size of system heap (Kb) (512 --> 4096)
+    --> Size of private heap (Kb) (64 --> 256)
+    --> Size of shared heap (Kb) (64 --> 256)
+    --> Maximum number of POSIX timers per process (128 --> 512)
+  --> Drivers
+    --> RTnet
+        --> RTnet, TCP/IP socket interface (Enable)
+            --> Drivers
+                --> New intel(R) PRO/1000 PCIe (Enable)
+                --> Realtek 8169 (Enable)
+                --> Loopback (Enable)
+        --> Add-Ons
+            --> Real-Time Capturing Support (Enable)
+* Power management and ACPI options
+  --> CPU Frequency scaling
+      --> CPU Frequency scaling (Disable)
+  --> ACPI (Advanced Configuration and Power Interface) Support
+      --> Processor (Disable)
+  --> CPU Idle
+      --> CPU idle PM support (Disable)
+* Pocessor type and features
+  --> Enable maximum number of SMP processors and NUMA nodes (Disable)
+  // Ref : http://xenomai.org/pipermail/xenomai/2017-September/037718.html
+  --> Processor family
+      --> Core 2/newer Xeon (if "cat /proc/cpuinfo | grep family" returns 6, set as Generic otherwise)
+  // Xenomai will issue a warning about CONFIG_MIGRATION, disable those in this order
+  --> Transparent Hugepage Support (Disable)
+  --> Allow for memory compaction (Disable)
+  --> Contiguous Memory Allocation (Disable)
+  --> Allow for memory compaction
+    --> Page Migration (Disable)
+* Device Drivers
+  --> Staging drivers
+      --> Unisys SPAR driver support
+         --> Unisys visorbus driver (Disable)
+
+커널 빌드 수행 및 deb 패키지 만들기(패키지까지 설치)
+sudo CONCURRENCY_LEVEL=8 CLEAN_SOURCE=no fakeroot make-kpkg --initrd --append-to-version --revision kernel_image kernel_headers
+cd ..
+가면 deb가 2개 생겨있을꺼임(headers와 image) 설치해 준다. 만약 빌드가 안되면 gcc 버전의 문제다. 4.1.18은 4.8 gcc를 쓴다 젠장...
+sudo dpkg -i linux-headers-4.1.18-xenomai-realtime_1.0_amd64.deb
+sudo dpkg -i linux-image-4.1.18-xenomai-realtime_1.0_amd64.deb
+
+non-root 유저 추가
+sudo addgroup xenomai --gid 1234
+sudo addgroup root xenomai
+sudo usermod -a -G xenomai $USER
+
+GRUB에서 부팅 옵션 추가
+sudo gedit /etc/default/grub에 진입하여
+
+GRUB_DEFAULT="Advanced options for Ubuntu>Ubuntu, with Linux 4.9.38-xenomai-3.0.3"
+#GRUB_DEFAULT=saved
+#GRUB_SAVEDEFAULT=true
+# Comment the following lines
+#GRUB_HIDDEN_TIMEOUT=0
+#GRUB_HIDDEN_TIMEOUT_QUIET=true
+GRUB_TIMEOUT=5
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash xenomai.allowed_group=1234"
+GRUB_CMDLINE_LINUX=""
+이렇게 바꿔준다. 만약 Intel 내장 그래픽을 사용하는 PC면 GRUB_CMDLINE_LINUX_DEFAULT를 아래의 문구로 변경한다. 안그러면 파워세이빙 모드가 방해할꺼임
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash i915.enable_rc6=0 i915.enable_dc=0 noapic xenomai.allowed_group=1234"
+
+sudo update-grub --> GRUB 업데이트
+sudo reboot
+
+제노마이 부팅 후 user space libraries 인스톨
+uname -a --> xenomai 나오면 성공한거임
+cd xenomai-3.0.3
+./configure --with-pic --with-core=cobalt --enable-smp --disable-tls --enable-dlopen-libs --disable-clock-monotonic-raw
+make -j`nproc`
+sudo make install
+
+--> 끝
+
+########### gcc여러 버전 설치 및 변경법 ############
+
+gcc --version --> 버전체크
+
+sudo apt install build-essential
+sudo apt -y install gcc-4 g++-4 gcc-5 g++-5 gcc-6 g++-6 gcc-7 g++-7 --> 18.04는 기본 7임
+
+<gcc, g++ 선택가능하게 alternatives에 설정 뒤의 400,500은 임의의 숫자로 적용>
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4 400
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4 400
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-5 500
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-5 500
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-6 600
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-6 600
+sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-7 700
+sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 700
+
+<gcc와 g++을 선택할 수 있게 뜸>
+sudo update-laternatives --config gcc
+sudo update-laternatives --config g++
+
+해당 설정 후 gcc --version으로 버전 체크를하면 변경된것을 볼 수 있음
+
+########### Etherlab Installation ############
+git clone https://gitlab.com/etherlab.org/ethercat.git
+
+git checkout stable-1.5 --> 반드시 이 버전을 쓰길 바람 아니면 드라이버를 못찾고 gcc 버전 충돌이 일어나 빌드가 안되는듯 버그가 많음
+
+./bootstrap
+
+./configure --enable-generic --disable-e100 --disable-8139too --disable-e1000 --disable-r8169 --sysconfdir=/etc --> generic kernel에서 configuration하는 방법임. xenomai에서는 저 장비중 하나를 반드시 소유하고 있어야함. 
+
+su
+
+make all modules --> generic으로 build할 경우 커널 GCC 버전에 맞춰서 빌드 됨 에러 발생시 GCC 버전을 높여야함
+
+make modules_install install
+
+depmod
+
+gedit /etc/sysconfig/ethercat 으로 ethercat address와 generic으로 설정
+
+echo KERNEL==\"EhterCAT[0-9]*\", MODE=\"0664"\ > /etc/udev/rules.d/99-EtherCAT.rules --> udev파일 만들기
+
+/etc/init.d/ethercat start 로 ethercat 시작시킴
+/etc/init.d/ethercat status 로 ethercat 상태확인
+/etc/init.d/ethercat stop 로 ethercat 정지시킴
